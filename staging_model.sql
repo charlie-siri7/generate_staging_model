@@ -24,10 +24,12 @@ staging_columns as (
         schema_tz.time_zone,
         case
             when c.Data_type='TIMESTAMP_TZ'
-            then rpad(concat('\{\{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type,'Need Timezone Record'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || lower(c.column_name)
+            -- You can remove the 'UTC' on the line below and replace it with another timezone if needed
+            then rpad(concat('\{\{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type,'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || lower(c.column_name)
 
             when c.Data_type='TIMESTAMP_NTZ'
-            then rpad(concat('\{\{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'Need Timezone Record'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'Need Timezone Record'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || lower(c.column_name)
+            -- You can remove the 2 'UTC' instances and replace them with different timezones if needed
+            then rpad(concat('\{\{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || lower(c.column_name)
 
             else rpad(c.column_name, cl.columnlength+50, ' ') ||' as ' || lower(c.column_name)
         end as staging_column

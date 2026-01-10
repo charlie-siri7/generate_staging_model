@@ -2,7 +2,7 @@ with
 -- Retrieve columns only from the current database
 src_columns as (select * from source.information_schema.columns where table_catalog = current_database()),
 
--- Prevent query from returning empty results
+-- Retrieve tables only from the current database
 src_tables as (select * from source.information_schema.tables where table_catalog = current_database()),
 
 stg_timezone_mapping as (select * from STAGING.Public.TIMEZONE_MAPPING_DATA),

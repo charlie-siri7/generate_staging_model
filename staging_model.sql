@@ -9,12 +9,12 @@ word_bank(word, priority) as (
         ('Created'), ('Updated'), ('Valid'), ('Closed'), ('Protocol')
     ) as t(word)
 ),
-with
+
 -- Retrieve columns only from the current database
-src_columns as (select * from source.information_schema.columns where table_catalog = current_database()),
+src_columns as (select * from information_schema.columns where table_catalog = current_database()),
 
 -- Retrieve tables only from the current database
-src_tables as (select * from source.information_schema.tables where table_catalog = current_database()),
+src_tables as (select * from information_schema.tables where table_catalog = current_database()),
 
 stg_timezone_mapping as (select * from STAGING.Public.TIMEZONE_MAPPING_DATA),
 
@@ -29,7 +29,6 @@ fix_names(column_name, table_name, current_name, step) as (
     -- Recursively apply the next word from the bank
     select 
         f.column_name, 
-        f.table_schema,
         f.table_name, 
         replace(f.current_name, lower(wb.word), wb.word), 
         f.step + 1
@@ -39,51 +38,40 @@ fix_names(column_name, table_name, current_name, step) as (
 
 -- Get the final result of the recursive calls
 transformed_names as (
-    select column_name,, table_schema, table_name, replace(current_name, '_', '') as pascal_column
+    select column_name, table_name, replace(current_name, '_', '') as pascal_column
     from fix_names
     where step = (select max(priority) from word_bank)
 ),
 
-prepared_expressions as (
-    select 
-        c.table_schema,
-        c.table_name,
-        c.column_name,
-        c.ordinal_position,
-        case
-            when c.Data_type='TIMESTAMP_TZ'
-             -- You can remove the 'UTC' on the line below and replace it with another timezone if needed
-            then concat('{{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\') }}')
-            when c.Data_type='TIMESTAMP_NTZ'
-            -- You can remove the 2 'UTC' instances and replace them with different timezones if needed
-            then concat('{{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'UTC'),'\') }}')
-            else c.column_name
-        end as left_side_expression
-    from src_columns c
-    left join stg_timezone_mapping as table_tz on table_tz.table_schema=c.table_schema and c.table_name=table_tz.table_name and c.column_name=table_tz.Column_name
-    left join stg_timezone_mapping as schema_tz on schema_tz.table_schema=c.table_schema and schema_tz.data_type = c.data_type
-),
-
 column_length as ( 
     select 
-        table_schema,
         table_name,
-        max(len(left_side_expression)) as max_expression_len
-    from prepared_expressions 
-    group by table_schema, table_name
+        max(len(column_name)) as columnlength
+    from src_columns 
+    group by table_name
 ),
 
 staging_columns as (
     select distinct 
-        pe.table_schema,
-        pe.table_name,
-        pe.ordinal_position,
-        -- Use the actual measured length + 5 for a consistent buffer
-        rpad(pe.left_side_expression, cl.max_expression_len + 5, ' ') 
-        || ' as ' || tn.pascal_column as staging_column
-    from prepared_expressions pe
-    join transformed_names tn on tn.column_name = pe.column_name and tn.table_name = pe.table_name and tn.table_schema = pe.table_schema
-    join column_length cl on cl.table_name = pe.table_name and cl.table_schema = pe.table_schema    
+        c.*,
+        tn.pascal_column,
+        case
+            when c.Data_type='TIMESTAMP_TZ'
+            -- You can remove the 'UTC' on the line below and replace it with another timezone if needed
+            then rpad(concat('\{\{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type,'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
+
+            when c.Data_type='TIMESTAMP_NTZ'
+            -- You can remove the 2 'UTC' instances and replace them with different timezones if needed
+            then rpad(concat('\{\{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
+
+            else rpad(c.column_name, cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
+        end as staging_column
+
+    from src_columns as c
+    join transformed_names as tn on tn.column_name = c.column_name and tn.table_name = c.table_name
+    join column_length as cl on cl.table_name = c.table_name
+    left join stg_timezone_mapping as table_tz on table_tz.table_schema=c.table_schema and c.table_name=table_tz.table_name and c.column_name=table_tz.Column_name
+    left join stg_timezone_mapping as schema_tz on schema_tz.table_schema=c.table_schema and schema_tz.data_type = c.data_type
 ),
 
 final as (

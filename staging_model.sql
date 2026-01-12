@@ -43,35 +43,51 @@ transformed_names as (
     where step = (select max(priority) from word_bank)
 ),
 
+-- The expression on the left side of the AS clause in the select statement
+prepared_expressions as (
+    select 
+        c.table_name,
+        c.column_name,
+        c.ordinal_position,
+        c.table_schema,
+        case
+            when c.Data_type='TIMESTAMP_TZ'
+            -- You can remove the 'UTC' on the line below and replace it with another timezone if needed
+            then concat('{{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\') }}')
+            
+            when c.Data_type='TIMESTAMP_NTZ'
+            -- You can remove the 2 'UTC' instances and replace them with different timezones if needed
+            then concat('{{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'UTC'),'\') }}')
+            else c.column_name
+        end as left_side_expression
+    from src_columns c
+    left join stg_timezone_mapping as table_tz on table_tz.table_schema=c.table_schema and c.table_name=table_tz.table_name and c.column_name=table_tz.Column_name
+    left join stg_timezone_mapping as schema_tz on schema_tz.table_schema=c.table_schema and schema_tz.data_type = c.data_type
+),
+
+-- Measure length of the left-hand expressions to align AS clauses
 column_length as ( 
     select 
         table_name,
-        max(len(column_name)) as columnlength
-    from src_columns 
+        max(len(left_side_expression)) as max_expression_len
+    from prepared_expressions 
     group by table_name
 ),
 
 staging_columns as (
     select distinct 
-        c.*,
-        tn.pascal_column,
-        case
-            when c.Data_type='TIMESTAMP_TZ'
-            -- You can remove the 'UTC' on the line below and replace it with another timezone if needed
-            then rpad(concat('\{\{ convert_timezone_format(\'', c.column_name, '\',\'', coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type,'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
+        pe.table_schema,
+        pe.table_name,
+        pe.ordinal_position,
+        -- Use the actual measured length + 5 for a consistent buffer
+        rpad(pe.left_side_expression, cl.max_expression_len + 5, ' ') || ' as ' || tn.pascal_column
+        as staging_column
 
-            when c.Data_type='TIMESTAMP_NTZ'
-            -- You can remove the 2 'UTC' instances and replace them with different timezones if needed
-            then rpad(concat('\{\{ convert_timezone_format(\'',c.column_name,'\',\'',coalesce(table_tz.Data_Type, schema_tz.Data_Type, c.Data_Type, 'UTC'),'\',\'',coalesce(table_tz.Time_Zone, schema_tz.Time_Zone, 'UTC'),'\') }}'), cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
-
-            else rpad(c.column_name, cl.columnlength+50, ' ') ||' as ' || tn.pascal_column
-        end as staging_column
-
-    from src_columns as c
-    join transformed_names as tn on tn.column_name = c.column_name and tn.table_name = c.table_name
-    join column_length as cl on cl.table_name = c.table_name
-    left join stg_timezone_mapping as table_tz on table_tz.table_schema=c.table_schema and c.table_name=table_tz.table_name and c.column_name=table_tz.Column_name
-    left join stg_timezone_mapping as schema_tz on schema_tz.table_schema=c.table_schema and schema_tz.data_type = c.data_type
+    from prepared_expressions pe
+    join transformed_names as tn on tn.column_name = pe.column_name and tn.table_name = pe.table_name
+    join column_length as cl on cl.table_name = pe.table_name
+    -- left join stg_timezone_mapping as table_tz on table_tz.table_schema=c.table_schema and c.table_name=table_tz.table_name and c.column_name=table_tz.Column_name
+    -- left join stg_timezone_mapping as schema_tz on schema_tz.table_schema=c.table_schema and schema_tz.data_type = c.data_type
 ),
 
 final as (
